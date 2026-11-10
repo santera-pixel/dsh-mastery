@@ -1,0 +1,7 @@
+# dsh-mastery bundle patch: inserts the plugin row into the web profile roster.
+# The node half (exports ".") owns skill discovery, per-session activation, the
+# /dsh-mastery HTTP routes and the skill_rail tool; the `dsh.client` declaration in
+# package.json makes the browser half (exports "./client") load inside the DSH Web GUI.
+- insert:
+    - id: dsh-mastery
+      name: dsh-mastery

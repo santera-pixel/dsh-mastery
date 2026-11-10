@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Syntax check both halves
+        run: |
+          node --check index.js
+          node --check client.js
+          node --check lib/git.js
+
+      - name: Frontmatter, document parsing and bundle shapes
+        run: node selfcheck.mjs
+
+      - name: Update machinery against a throwaway repository
+        run: node tests/updates.mjs
+
+      - name: Pack the plugin
+        run: npm pack --silent
+
+      - name: The tarball ships runtime code only
+        run: |
+          tar -tzf dsh-mastery-*.tgz | sed 's|^package/||' | sort > packed.txt
+          grep -qx 'index.js' packed.txt
+          grep -qx 'client.js' packed.txt
+          grep -qx 'lib/git.js' packed.txt
+          grep -qx 'cordis.patch.yml' packed.txt
+          grep -qx 'icon.svg' packed.txt
+          grep -qx 'LICENSE' packed.txt
+          if grep -qE '^(tests/|node_modules/|selfcheck\.mjs)' packed.txt; then
+            echo 'test or build files leaked into the tarball'; exit 1
+          fi
+          cat packed.txt
+
+      - name: The packed entry point loads
+        run: |
+          mkdir -p unpacked
+          tar -xzf dsh-mastery-*.tgz -C unpacked
+          node -e "
+            import('./unpacked/package/index.js').then((m) => {
+              if (m.name !== 'dsh-mastery') throw new Error('unexpected name ' + m.name)
+              if (typeof m.apply !== 'function') throw new Error('missing apply()')
+              if (!Array.isArray(m.inject) || !m.inject.includes('skills')) throw new Error('missing inject')
+              console.log('ok', m.name, m.inject.join(','))
+            })
+          "

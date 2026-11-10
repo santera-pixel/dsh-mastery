@@ -1,0 +1,7 @@
+node_modules/
+*.tgz
+packed.txt
+unpacked/
+.DS_Store
+Thumbs.db
+*.log
