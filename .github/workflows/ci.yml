@@ -31,6 +31,9 @@ jobs:
       - name: Update machinery against a throwaway repository
         run: node tests/updates.mjs
 
+      - name: Every route, against a fake host context
+        run: node tests/http.mjs
+
       - name: Pack the plugin
         run: npm pack --silent
 

@@ -158,11 +158,13 @@ directories exist the old one is left untouched and a note is logged.
 ```bash
 node selfcheck.mjs      # frontmatter parsing + the three bundles' skill names (skips missing clones)
 node tests/updates.mjs  # describeUpdate, settings merge, lib/git.js against a throwaway repo
+node tests/http.mjs     # mounts the plugin with a fake context and drives every route
 npm pack --dry-run      # what ships
 ```
 
-Both suites run in CI on every push, and CI also asserts that the packed tarball contains the
-runtime files and no tests, and that the packed entry point still exports `apply()`.
+All three suites run in CI on every push (or `npm test` locally), and CI also asserts that the
+packed tarball contains the runtime files and no tests, and that the packed entry point still
+exports `apply()`.
 
 ## Compatibility
 
