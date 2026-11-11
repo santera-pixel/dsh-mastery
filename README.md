@@ -17,18 +17,30 @@ ships inside the package, so it has no upstream to be behind.
 > The image above is an illustration drawn by [`docs/rail.py`](docs/rail.py), not a screenshot of a
 > live GUI.
 
+## A chip is an offer
+
+A toggle puts a bundle's skills in this chat's catalog. It does not make the model use them. The model
+reads a skill's name and its one-line description there, and a body is fetched only when it calls
+`skill` with that name. When a chat ends with `never loaded` under a chip that is switched on, the
+model saw those skills and passed on them: a model decision, not a switch that failed. The counter
+exists to keep those two apart.
+
+Naming the skill works better than flipping the chip. `run the antislop pass over this` gives the
+model an instruction it can act on, where a chip that is merely on leaves it to judge relevance from
+a one-line description. A bundle is a container, and what the model responds to is the skill itself.
+
 ## What it does
 
 | Piece | Behaviour |
 | --- | --- |
 | **Chips** | One per bundle, in `conversation.input.right`, order 10 (left of the model picker). |
 | **Toggle** | Registers/unregisters every skill of a bundle into that agent's skill layer. The change is visible to the model on its next step, not the next session. |
-| **Count** | Increments only when the `skill` tool really returns a body — proof of use, not proof of visibility. |
+| **Count** | Counts real use: it increments only when the `skill` tool returns a body. |
 | **`↑N`** | Commits behind upstream after the last `git fetch`. Hidden when level, when the source is not a git clone (the package-local chip says so in its tooltip), or when checking failed. |
 | **Persistence** | Which bundles are on is stored per session in `state.json`; reopening a chat restores its switches. |
 
-The host never copies skills into the plugin. A bundle *is* a directory — typically somebody
-else's repository clone — and the plugin reads the `SKILL.md` files from there at mount and after
+The host never copies skills into the plugin. A bundle *is* a directory, typically somebody
+else's repository clone, and the plugin reads the `SKILL.md` files from there at mount and after
 every update.
 
 ## The four bundles
@@ -43,9 +55,9 @@ every update.
 ### Assay
 
 Assay is the only skill here not cloned from somebody else's repository. It is a synthesis of three
-public reasoning-discipline skills — [mrtooher/fable-mode](https://github.com/mrtooher/fable-mode),
+public reasoning-discipline skills ([mrtooher/fable-mode](https://github.com/mrtooher/fable-mode),
 [codeclawd/fable-mode](https://github.com/codeclawd/fable-mode) and
-[chitinlabs/mythos-skill](https://github.com/chitinlabs/mythos-skill) — rewritten as one document:
+[chitinlabs/mythos-skill](https://github.com/chitinlabs/mythos-skill)), rewritten as one document:
 pick an intensity (most tasks are light), rotate thinking lenses until they stop changing the
 answer, act in steps whose result you observe, and close with a claim ledger that separates verified
 from unverified. It is deliberately honest about its own limits: a checklist shapes procedure, it
@@ -72,7 +84,7 @@ dsh plugin --profile desktop add link:/absolute/path/to/dsh-mastery
 
 `dsh plugin <args>` forwards to pnpm inside the profile directory. If your profile does not pick
 the bundle up automatically, add `dsh-mastery` to the `dsh.profile.bundles` array in
-`~/.dsh/profiles/<profile>/package.json` — that array is what the loader reads, and
+`~/.dsh/profiles/<profile>/package.json`: that array is what the loader reads, and
 [`cordis.patch.yml`](cordis.patch.yml) is the row it inserts.
 
 The plugin id cannot hot-load: **restart the harness** after installing, then reload the GUI tab.
@@ -100,7 +112,7 @@ them at any clone of a skills repository:
 
 A `config.json` written by an older release (`"version": 1`) is upgraded once on mount: bundles it
 has never seen are appended, everything you edited stays as it is, and the file is rewritten at
-version 2. After that the list is yours — a bundle you delete stays deleted.
+version 2. After that the list is yours: a bundle you delete stays deleted.
 
 Defaults look for these three clones under `<DSH_HOME>/mastery/sources/`; setting
 `DSH_MASTERY_SOURCES` overrides the base directory for all of them:
@@ -120,9 +132,9 @@ clones elsewhere is never moved.
 never rewrites them on its own. The fourth chip ships inside the package and has no upstream at all.
 What it does instead:
 
-- on mount (and every `intervalHours`, default 6) it runs `git fetch` per bundle — network only,
-  no working-tree writes — and stores the result in `~/.dsh/mastery/updates.json`, so the `↑N`
-  arrows survive a restart;
+- on mount (and every `intervalHours`, default 6) it runs `git fetch` per bundle (network only, no
+  working-tree writes) and stores the result in `~/.dsh/mastery/updates.json`, so the `↑N` arrows
+  survive a restart;
 - `skill_rail` with `action=updates` fetches right now and reports each bundle in words;
 - `skill_rail` with `action=update` (optionally `bundle: "antislop"`) runs
   `git pull --ff-only --no-rebase` and immediately re-registers the new text for every live
@@ -134,7 +146,7 @@ and why; nothing is forced.
 
 `autoPull` is off by default because a fast-forward silently changes what the model will read on
 the next chip press. Turn it on in `config.json` if you would rather have that happen by itself.
-`autoCheck` is on by default — a stale arrow is worse than none.
+`autoCheck` is on by default, because a stale arrow is worse than none.
 
 ## Tool and HTTP surface
 
@@ -147,8 +159,8 @@ share one state object.
 | `skill_rail` `{action:"enable", bundle:"uiux"}` | `POST /dsh-mastery/toggle` | Register/remove one bundle for one session. |
 | `skill_rail` `{action:"updates"}` | `POST /dsh-mastery/updates/check` | `git fetch` every bundle, save the result. |
 | `skill_rail` `{action:"update", bundle?}` | `POST /dsh-mastery/updates/pull` | Fast-forward one bundle (or all), re-register live sessions. |
-| — | `GET /dsh-mastery/updates` | Cached status, no network. |
-| — | `GET /dsh-mastery/health` | Plugin id, store directory, bundle count. |
+| chip | `GET /dsh-mastery/updates` | Cached status, no network. |
+| chip | `GET /dsh-mastery/health` | Plugin id, store directory, bundle count. |
 
 `status` output, one block per bundle:
 
@@ -171,7 +183,7 @@ ON   Assay (assay) — 1 skill: assay · never loaded
    which is why a registered skill becomes loadable and appears in the catalog.
 3. **Counting** listens on the harness `tools/result` feed: a `skill` result whose name belongs to
    an enabled bundle increments that session's counter. The listener is synchronous and cheap.
-4. **Updates** live in [`lib/git.js`](lib/git.js) — the only file that shells out to git — with
+4. **Updates** live in [`lib/git.js`](lib/git.js), the only file that shells out to git, with
    `GIT_TERMINAL_PROMPT=0` so a missing credential can never block a turn.
 
 State lives in `~/.dsh/mastery/`: `config.json`, `state.json`, `updates.json`. An install upgrading
