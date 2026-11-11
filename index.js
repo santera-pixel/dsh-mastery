@@ -20,6 +20,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { describeRepository, fetchRepository, gitError, isGitCheckout, pullRepository } from './lib/git.js'
 
@@ -40,13 +41,19 @@ const LEGACY_STORE_DIR = 'skillrail'
 const CONFIG_FILE = 'config.json'
 const STATE_FILE = 'state.json'
 const UPDATES_FILE = 'updates.json'
-const CONFIG_VERSION = 1
+const CONFIG_VERSION = 2
 const STATE_VERSION = 1
 const UPDATES_VERSION = 1
 
 /** Provider/source tags recorded on every skill we register, so it is attributable. */
 const PROVIDER = 'mastery'
 const SOURCE = 'custom'
+
+/**
+ * The plugin's own directory. One bundle ships inside the package (`skills/assay`) instead of a
+ * clone, so on every machine — including a fresh install and CI — that chip is always present.
+ */
+const PACKAGE_ROOT = dirname(fileURLToPath(import.meta.url))
 
 /**
  * Update-check defaults. `autoCheck` fetches in the background on mount (git is cheap, and a
@@ -76,6 +83,7 @@ function mergeUpdateSettings(raw) {
  */
 function describeUpdate(record) {
   if (record === null || record === undefined) return 'source not checked yet'
+  if (record.local === true) return 'authored in this package — there is no upstream to check'
   if (record.git !== true) return `not a git checkout (${record.root})`
   const remote =
     typeof record.upstream === 'string' && record.upstream !== ''
@@ -109,9 +117,9 @@ const SKIP_DIRECTORIES = new Set(['node_modules', '.git', '.svn', 'dist', 'build
 
 const MAX_BODY_BYTES = 256 * 1024
 
-/** Base directory the three clones live in when the plugin is used on this machine. */
+/** Base directory the source clones live in when the plugin is used on this machine. */
 /**
- * Where the three bundles are looked for when config.json says nothing. `DSH_MASTERY_SOURCES`
+ * Where the cloned bundles are looked for when config.json says nothing. `DSH_MASTERY_SOURCES`
  * overrides the base wholesale; otherwise new installs get `<DSH_HOME>/mastery/sources`, and the
  * README's clone commands put the repositories there. An existing config.json wins over both,
  * so a machine that already points at clones elsewhere is left alone.
@@ -120,8 +128,10 @@ const DEFAULT_SOURCE_BASE =
   (process.env.DSH_MASTERY_SOURCES || '').trim() !== '' ? (process.env.DSH_MASTERY_SOURCES || '').trim() : join(dshHome(), STORE_DIR, 'sources')
 
 /**
- * The three chips. `root` is a directory to scan; every `SKILL.md` below it becomes part of
- * the bundle. Order here is the order of the chips.
+ * The chips. `root` is a directory to scan; every `SKILL.md` below it becomes part of the bundle.
+ * Order here is the order of the chips. `local: true` marks a bundle that is authored here and
+ * shipped inside the package: it has no git history of its own, so `updates` reports it instead
+ * of fetching, and `update` leaves it alone.
  */
 const DEFAULT_BUNDLES = [
   {
@@ -145,7 +155,69 @@ const DEFAULT_BUNDLES = [
     blurb: 'Design intelligence: styles, palettes, typography, UX rules, charts',
     root: join(DEFAULT_SOURCE_BASE, 'ui-ux-pro-max-skill'),
   },
+  {
+    id: 'assay',
+    label: 'Assay',
+    title: 'Assay',
+    blurb: 'Depth of reasoning, verified claims and honest delivery for work that has consequences',
+    root: join(PACKAGE_ROOT, 'skills', 'assay'),
+    local: true,
+  },
 ]
+
+/**
+ * Append the bundles a config file written by an older release has never seen. `version` is the
+ * marker: the append happens exactly once, on the bump, so a bundle the user removed on purpose
+ * stays removed instead of reappearing on every mount.
+ */
+function upgradeConfig(version, rawBundles) {
+  const known = typeof version === 'number' && Number.isFinite(version) ? version : 0
+  if (known >= CONFIG_VERSION) return rawBundles
+  const present = new Set(rawBundles.map((entry) => entry && entry.id))
+  return [...rawBundles, ...DEFAULT_BUNDLES.filter((bundle) => !present.has(bundle.id))]
+}
+
+/** Whether a config row can be resolved at all; a malformed row is skipped, never fatal. */
+function usableEntry(entry) {
+  return (
+    entry !== null &&
+    typeof entry === 'object' &&
+    typeof entry.id === 'string' &&
+    entry.id !== '' &&
+    typeof entry.root === 'string' &&
+    entry.root.trim() !== ''
+  )
+}
+
+/** A config row reduced to the fields the rest of the plugin reads. */
+function toBundleEntry(entry) {
+  return {
+    id: entry.id,
+    label: typeof entry.label === 'string' && entry.label !== '' ? entry.label : entry.id,
+    title: typeof entry.title === 'string' ? entry.title : undefined,
+    blurb: typeof entry.blurb === 'string' ? entry.blurb : '',
+    root: entry.root,
+    // `local` marks a bundle that ships inside the package, so it owns no git history.
+    local: entry.local === true,
+  }
+}
+
+/**
+ * The description of a source that owns no git state at all — a bundle shipped inside the
+ * package. Written out rather than fetched so the update record has the same shape everywhere.
+ */
+const EMPTY_DESCRIPTION = {
+  git: false,
+  branch: null,
+  upstream: null,
+  remoteUrl: null,
+  head: null,
+  upstreamHead: null,
+  behind: null,
+  ahead: null,
+  dirty: false,
+  dirtyFiles: 0,
+}
 
 /** An error that already knows the HTTP status it must be reported with. */
 class HttpError extends Error {
@@ -313,6 +385,7 @@ async function resolveBundle(bundle) {
     title: bundle.title || bundle.label,
     blurb: bundle.blurb || '',
     root: bundle.root,
+    local: bundle.local === true,
     present: false,
     skills: [],
     warnings: [],
@@ -482,17 +555,27 @@ export function apply(ctx) {
     try {
       const text = await readFile(file, 'utf8')
       const parsed = JSON.parse(text)
-      const bundles = Array.isArray(parsed && parsed.bundles) ? parsed.bundles : []
-      const usable = bundles
-        .filter((entry) => entry && typeof entry.id === 'string' && typeof entry.root === 'string' && entry.root.trim() !== '')
-        .map((entry) => ({
-          id: entry.id,
-          label: typeof entry.label === 'string' && entry.label !== '' ? entry.label : entry.id,
-          title: typeof entry.title === 'string' ? entry.title : undefined,
-          blurb: typeof entry.blurb === 'string' ? entry.blurb : '',
-          root: entry.root,
-        }))
-      if (usable.length > 0) return { bundles: usable, updates: mergeUpdateSettings(parsed && parsed.updates) }
+      const raw = Array.isArray(parsed && parsed.bundles) ? parsed.bundles.filter(usableEntry) : []
+      if (raw.length > 0) {
+        const stale = (parsed && parsed.version) !== CONFIG_VERSION
+        const bundled = stale ? upgradeConfig(parsed && parsed.version, raw) : raw
+        const updates = mergeUpdateSettings(parsed && parsed.updates)
+        if (stale) {
+          // Safe to rewrite: only the appended defaults are new, so nothing the user edited is
+          // dropped. Failing to persist is not fatal — the upgraded list is returned either way,
+          // and the next mount upgrades again.
+          try {
+            const document = { ...parsed, version: CONFIG_VERSION, updates, bundles: bundled }
+            await writeFile(file, `${JSON.stringify(document, null, 2)}\n`, 'utf8')
+            if (bundled.length !== raw.length) {
+              log(`upgraded config to version ${CONFIG_VERSION}: +${bundled.length - raw.length} bundle`)
+            }
+          } catch (error) {
+            log('could not persist the upgraded config:', error && error.message ? error.message : String(error))
+          }
+        }
+        return { bundles: bundled.map(toBundleEntry), updates }
+      }
     } catch (error) {
       if (!error || error.code !== 'ENOENT') log('could not read config file:', error && error.message ? error.message : String(error))
     }
@@ -652,6 +735,7 @@ export function apply(ctx) {
     return {
       id: bundle.id,
       root: bundle.root,
+      local: bundle.local === true,
       git: described.git,
       branch: described.branch,
       upstream: described.upstream,
@@ -719,6 +803,15 @@ export function apply(ctx) {
   async function checkBundle(bundle, options) {
     const timeout = options.timeout
     const network = options.network === true
+    // A package-local bundle has no history to be behind, so there is nothing to fetch and the
+    // record says so with no error attached — an error would read as a broken checkout.
+    if (bundle.local === true) {
+      return stampRecord(bundle, EMPTY_DESCRIPTION, {
+        fetched: false,
+        checkedAt: new Date().toISOString(),
+        error: null,
+      })
+    }
     let described = await describeRepository(bundle.root)
     let fetched = false
     let error = null
@@ -755,6 +848,7 @@ export function apply(ctx) {
         record = {
           id: bundle.id,
           root: bundle.root,
+          local: bundle.local === true,
           git: isGitCheckout(bundle.root),
           branch: null,
           upstream: null,
@@ -813,6 +907,17 @@ export function apply(ctx) {
     const timeout = updateSettings.timeoutSeconds * 1000
     const results = []
     for (const bundle of wanted) {
+      if (bundle.local === true) {
+        results.push({
+          id: bundle.id,
+          ok: false,
+          error: 'authored in this package, so there is no upstream to pull from',
+          before: null,
+          after: null,
+          behind: null,
+        })
+        continue
+      }
       const before = await describeRepository(bundle.root)
       if (!before.git) {
         results.push({ id: bundle.id, ok: false, error: 'not a git checkout', before: null, after: null, behind: null })
@@ -1197,7 +1302,7 @@ export function apply(ctx) {
       ctx.tools.register({
         name: 'skill_rail',
         description:
-          'Inspect or change the skill bundles attached to this chat. Bundles are groups of loadable skills (3dviz, antislop, uiux); enabling one adds its skills to this session\u2019s available-skills catalog so the `skill` tool can load them, disabling removes them. `status` also reports whether those skills are visible in this session only or leaked into the global catalog, and where each bundle\u2019s source lives. `updates` fetches those git sources and reports whether they are behind; `update` fast-forwards one bundle (or all) and re-registers the new text immediately.',
+          `Inspect or change the skill bundles attached to this chat. Bundles are groups of loadable skills (${bundleIds.join(', ')}); enabling one adds its skills to this session\u2019s available-skills catalog so the \`skill\` tool can load them, disabling removes them. \`status\` also reports whether those skills are visible in this session only or leaked into the global catalog, and where each bundle\u2019s source lives. \`updates\` fetches the git sources and reports whether they are behind (a bundle authored inside the package is reported, not fetched); \`update\` fast-forwards one bundle (or all) and re-registers the new text immediately.`,
         parameters: {
           type: 'object',
           properties: {
@@ -1339,11 +1444,13 @@ export function apply(ctx) {
 }
 
 export {
+  CONFIG_VERSION,
   DEFAULT_BUNDLES,
   DEFAULT_UPDATES,
   describeUpdate,
+  findSkillFiles,
   mergeUpdateSettings,
   parseFrontmatter,
   parseSkillDocument,
-  findSkillFiles,
+  upgradeConfig,
 }

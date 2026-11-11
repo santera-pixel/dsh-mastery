@@ -5,6 +5,8 @@ through --dsw-alias-* tokens; the values below are a plausible dark-theme stand-
 documented in the README so nobody mistakes it for captured UI.
 """
 
+from pathlib import Path
+
 from PIL import Image, ImageDraw, ImageFont
 
 S = 3  # supersample; the result is downscaled for crisp edges
@@ -42,6 +44,7 @@ CHIPS = [
     {"label": "3Dviz", "count": "3", "on": True},
     {"label": "Anti-Slop", "count": "", "on": False},
     {"label": "UI/UX", "count": "", "on": False},
+    {"label": "Assay", "count": "", "on": True},
 ]
 MODEL = "DeepSeek V4"
 
@@ -127,5 +130,6 @@ draw.line(
 final = img.convert("RGB")
 target_w = 1200
 final = final.resize((target_w, round(final.height * target_w / final.width)), Image.LANCZOS)
-final.save(r"C:\Users\Santera\Documents\deepseek-harness\ungrouped\dsh-skillrail\docs\rail.png")
-print("wrote", final.size)
+out = Path(__file__).with_name("rail.png")
+final.save(out)
+print("wrote", out, final.size)

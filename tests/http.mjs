@@ -7,6 +7,7 @@ import { EventEmitter } from 'node:events'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
 const run = promisify(execFile)
@@ -65,9 +66,14 @@ try {
     join(home, 'mastery', 'config.json'),
     JSON.stringify(
       {
-        version: 1,
+        version: 2,
         updates: { autoCheck: false, autoPull: false, intervalHours: 6, timeoutSeconds: 20 },
-        bundles: [{ id: 'demo', label: 'Demo', title: 'Demo bundle', blurb: 'Fixture', root: clone }],
+        bundles: [
+          { id: 'demo', label: 'Demo', title: 'Demo bundle', blurb: 'Fixture', root: clone },
+          // The bundle that ships inside the package, included so the local (no-upstream) path is
+          // exercised through the real handler rather than only unit-checked.
+          { id: 'assay', label: 'Assay', title: 'Assay', blurb: 'Package-local fixture', root: fileURLToPath(new URL('../skills/assay', import.meta.url)), local: true },
+        ],
       },
       null,
       2,
@@ -143,6 +149,9 @@ try {
     equal('bundle id', payload.value.bundles[0].id, 'demo')
     equal('bundle discovered', payload.value.bundles[0].skills, ['alpha'])
     equal('bundle present', payload.value.bundles[0].present, true)
+    equal('package-local bundle id', payload.value.bundles[1].id, 'assay')
+    equal('package-local bundle discovered', payload.value.bundles[1].skills, ['assay'])
+    equal('package-local bundle present', payload.value.bundles[1].present, true)
   }
 
   console.log('state')
@@ -182,6 +191,11 @@ try {
     const saved = JSON.parse(await readFile(join(home, 'mastery', 'updates.json'), 'utf8'))
     equal('updates.json version', saved.version, 1)
     equal('updates.json record', saved.bundles.demo.behind, 0)
+
+    const local = payload.value.bundles[1]
+    equal('a package-local bundle is not a checkout', local.git, false)
+    equal('…and is marked local', local.local, true)
+    equal('…with no error attached', local.error, null)
   }
 
   console.log('toggle without a live agent')
@@ -221,6 +235,28 @@ try {
     equal('clone moved to the new commit', state.payload.value.bundles[0].update.head.sha, upstreamHead.stdout.trim())
     equal('text says up to date', state.payload.value.bundles[0].updateText.split(' @ ')[0], 'up to date with origin/main')
     check('new body visible to the skill', state.payload.value.bundles[0].skills.length === 1)
+  }
+
+  console.log('package-local bundle')
+  {
+    const pulled = await call('POST', '/dsh-mastery/updates/pull', { bundle: 'assay' })
+    equal('pull status', pulled.status, 200)
+    equal('pull refused', pulled.payload.value.results[0].ok, false)
+    check('pull explains why', pulled.payload.value.results[0].error.includes('no upstream'), pulled.payload.value.results[0].error)
+
+    const all = await call('POST', '/dsh-mastery/updates/pull', {})
+    check(
+      'pull-all tolerates the local bundle',
+      all.payload.value.results.length === 2 && all.payload.value.results[0].ok === true && all.payload.value.results[1].ok === false,
+      JSON.stringify(all.payload.value.results),
+    )
+
+    const state = await call('GET', '/dsh-mastery/state?sessionId=s1')
+    equal('chip text', state.payload.value.bundles[1].updateText, 'authored in this package — there is no upstream to check')
+
+    const toggled = await call('POST', '/dsh-mastery/toggle', { sessionId: 's1', bundleId: 'assay', enabled: true })
+    equal('toggle status', toggled.status, 200)
+    equal('the local bundle can be switched on', toggled.payload.value.bundles[1].enabled, true)
   }
 
   console.log('errors')

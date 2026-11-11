@@ -1,16 +1,18 @@
 # dsh-mastery
 
-Three chips in the DeepSeek Harness composer, immediately left of the model selector. Each chip
+Four chips in the DeepSeek Harness composer, immediately left of the model selector. Each chip
 is a **per-chat switch** for one bundle of agent skills: click it and those skills appear in *this
 conversation's* `<available_skills>` catalog, so the model can load them with the built-in `skill`
 tool; click again and they are gone. Nothing is global, nothing is copied, and the count next to a
 chip is the number of times the model actually pulled a skill body in this chat.
 
-Each chip also answers a second question: **has the skill source changed upstream?** The number in
-the arrow (`↑2`) is how many commits the bundle's git clone is behind its upstream as of the last
-fetch. A background check keeps that fresh; `skill_rail` can fetch on demand and fast-forward.
+Three chips point at a git clone, and each of those answers a second question: **has the skill
+source changed upstream?** The number in the arrow (`↑2`) is how many commits the bundle's clone is
+behind its upstream as of the last fetch. A background check keeps that fresh; `skill_rail` can
+fetch on demand and fast-forward. The fourth chip, **Assay**, is authored in this repository and
+ships inside the package, so it has no upstream to be behind.
 
-![The three chips in the composer, and the update arrow](docs/rail.png)
+![The chip row in the composer, and the update arrow](docs/rail.png)
 
 > The image above is an illustration drawn by [`docs/rail.py`](docs/rail.py), not a screenshot of a
 > live GUI.
@@ -22,12 +24,35 @@ fetch. A background check keeps that fresh; `skill_rail` can fetch on demand and
 | **Chips** | One per bundle, in `conversation.input.right`, order 10 (left of the model picker). |
 | **Toggle** | Registers/unregisters every skill of a bundle into that agent's skill layer. The change is visible to the model on its next step, not the next session. |
 | **Count** | Increments only when the `skill` tool really returns a body — proof of use, not proof of visibility. |
-| **`↑N`** | Commits behind upstream after the last `git fetch`. Hidden when level, when the source is not a git clone, or when checking failed (the tooltip says why). |
+| **`↑N`** | Commits behind upstream after the last `git fetch`. Hidden when level, when the source is not a git clone (the package-local chip says so in its tooltip), or when checking failed. |
 | **Persistence** | Which bundles are on is stored per session in `state.json`; reopening a chat restores its switches. |
 
 The host never copies skills into the plugin. A bundle *is* a directory — typically somebody
 else's repository clone — and the plugin reads the `SKILL.md` files from there at mount and after
 every update.
+
+## The four bundles
+
+| Chip | Ships as | What is inside |
+| --- | --- | --- |
+| **3Dviz** | clone of [`viettranx/3dviz-pro-max`](https://github.com/viettranx/3dviz-pro-max) | Expressive 3D scenes, explainers and interactive models. |
+| **Anti-Slop** | clone of [`miqdadbadjuber/Anti-Slop`](https://github.com/miqdadbadjuber/Anti-Slop) | The core filter plus its code, copy, layout, UI and human-writing variants. |
+| **UI/UX** | clone of [`nextlevelbuilder/ui-ux-pro-max-skill`](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) | Design intelligence: styles, palettes, typography, UX rules, charts. |
+| **Assay** | [`skills/assay/`](skills/assay/SKILL.md) in this package | One skill: a procedure for work where being wrong costs something. |
+
+### Assay
+
+Assay is the only skill here not cloned from somebody else's repository. It is a synthesis of three
+public reasoning-discipline skills — [mrtooher/fable-mode](https://github.com/mrtooher/fable-mode),
+[codeclawd/fable-mode](https://github.com/codeclawd/fable-mode) and
+[chitinlabs/mythos-skill](https://github.com/chitinlabs/mythos-skill) — rewritten as one document:
+pick an intensity (most tasks are light), rotate thinking lenses until they stop changing the
+answer, act in steps whose result you observe, and close with a claim ledger that separates verified
+from unverified. It is deliberately honest about its own limits: a checklist shapes procedure, it
+does not add capability.
+
+Because it ships inside the package, installing the plugin always gives the current text, and
+`skill_rail` reports `authored in this package — there is no upstream to check` instead of fetching.
 
 ## Install
 
@@ -59,7 +84,7 @@ them at any clone of a skills repository:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "updates": { "autoCheck": true, "autoPull": false, "intervalHours": 6, "timeoutSeconds": 60 },
   "bundles": [
     {
@@ -72,6 +97,10 @@ them at any clone of a skills repository:
   ]
 }
 ```
+
+A `config.json` written by an older release (`"version": 1`) is upgraded once on mount: bundles it
+has never seen are appended, everything you edited stays as it is, and the file is rewritten at
+version 2. After that the list is yours — a bundle you delete stays deleted.
 
 Defaults look for these three clones under `<DSH_HOME>/mastery/sources/`; setting
 `DSH_MASTERY_SOURCES` overrides the base directory for all of them:
@@ -87,8 +116,9 @@ clones elsewhere is never moved.
 
 ## Do the skills update themselves?
 
-**No.** The three sources are ordinary git clones on disk; the plugin reads them and never
-rewrites them on its own. What it does instead:
+**No.** The three clone-backed sources are ordinary git clones on disk; the plugin reads them and
+never rewrites them on its own. The fourth chip ships inside the package and has no upstream at all.
+What it does instead:
 
 - on mount (and every `intervalHours`, default 6) it runs `git fetch` per bundle — network only,
   no working-tree writes — and stores the result in `~/.dsh/mastery/updates.json`, so the `↑N`
@@ -127,6 +157,8 @@ ON   3Dviz (3dviz) — 1 skill: 3d-scene-builder · body loaded 2×
       source: up to date with origin/main @ d077e0e (2026-09-11), 12 edited files locally
 off  Anti-Slop (antislop) — 6 skills: antislop, antislop-code, … · never loaded
       source: 4 commits behind origin/main @ 41b85ed (2026-11-10)
+ON   Assay (assay) — 1 skill: assay · never loaded
+      source: authored in this package — there is no upstream to check
 ```
 
 ## How it works
@@ -156,7 +188,7 @@ directories exist the old one is left untouched and a note is logged.
 ## Development
 
 ```bash
-node selfcheck.mjs      # frontmatter parsing + the three bundles' skill names (skips missing clones)
+node selfcheck.mjs      # frontmatter, config upgrade, and every bundle's skill names (skips missing clones)
 node tests/updates.mjs  # describeUpdate, settings merge, lib/git.js against a throwaway repo
 node tests/http.mjs     # mounts the plugin with a fake context and drives every route
 npm pack --dry-run      # what ships

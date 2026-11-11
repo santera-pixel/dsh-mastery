@@ -1,7 +1,7 @@
 {
   "name": "dsh-mastery",
-  "version": "1.0.0",
-  "description": "Three toggle chips beside the model selector: each adds or removes a skill bundle from the current chat's skill catalog, and each shows whether its git source has new commits upstream.",
+  "version": "1.1.0",
+  "description": "Toggle chips beside the model selector: each adds or removes a skill bundle from the current chat's skill catalog, and each git-backed chip shows whether its source has new commits upstream.",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -15,6 +15,7 @@
     "index.js",
     "client.js",
     "lib",
+    "skills",
     "cordis.patch.yml",
     "locale",
     "icon.svg",
